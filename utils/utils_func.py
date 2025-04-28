@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-from .args import *
-from .audio import *
-from .image import *
-from .keyboard import *
-from .log import *
-from .model import *
-from .prompts import *
-from .table import *
-from .tensor import *
+# from .args import *
+# from .audio import *
+# from .image import *
+# from .keyboard import *
+# from .log import *
+# from .model import *
+# from .prompts import *
+# from .templates import *
+# from .table import *
+# from .tensor import *
 
 
 def replace_text(text, dict):

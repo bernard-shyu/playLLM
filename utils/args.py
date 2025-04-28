@@ -38,7 +38,7 @@ class ArgParser(argparse.ArgumentParser):
             self.add_argument("--save-mermaid", type=str, default=None, help="save mermaid diagram of the pipeline to this file")
             
         if 'chat' in extras:
-            from local_llm import ChatTemplates
+            from .templates import ChatTemplates
             self.add_argument("--chat-template", type=str, default=None, choices=list(ChatTemplates.keys()), help="manually select the chat template")
             self.add_argument("--system-prompt", type=str, default=None, help="override the default system prompt instruction")
             self.add_argument("--wrap-tokens", type=int, default=512, help="the number of most recent tokens in the chat to keep when the chat overflows the max context length")
