@@ -43,11 +43,41 @@ def load_model(model_id: str):
     )
     return model, tokenizer
 
-def generate_response(model, tokenizer, prompt: str, args):
+def prompt_template(model, tokenizer, user_prompt: str, system_prompt: str):
+    # Default system prompt if none provided
+    if system_prompt is None:
+        system_prompt = "You are a helpful AI assistant."
+    
+    # Format the prompt according to Llama 3.2 chat template
+    messages = []
+    
+    # Add system message if provided
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    
+    # Add user message
+    messages.append({"role": "user", "content": user_prompt})
+    
+    # Apply the chat template
+    prompt = tokenizer.apply_chat_template(
+        messages, 
+        tokenize=False, 
+        add_generation_prompt=True
+    )
+    
+    # 3. Tokenize input
+    #inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    inputs = tokenizer(prompt, return_tensors="pt")                 # Tokenize the prompt
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}     # Move input tensors to the same device as the model
+
+    return inputs
+        
+
+def generate_response(model, tokenizer, user_prompt: str, args):
     """Generate text based on a prompt."""
 
-    # 3. Tokenize input
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    # apply prompt template
+    inputs = prompt_template(model, tokenizer, user_prompt, args.system_prompt)
 
     # 4. Generate bot reply
     with torch.no_grad():
@@ -62,7 +92,13 @@ def generate_response(model, tokenizer, prompt: str, args):
             eos_token_id=tokenizer.eos_token_id,          # End generation at EOS
         )
 
-    return output
+    # Decode and return only the assistant's response
+    full_response = tokenizer.decode(output[0], skip_special_tokens=True)
+    
+    # Extract only the assistant's response
+    assistant_response = full_response.split("<｜Assistant｜>")[-1].strip()
+    
+    return assistant_response
 
 #-------------------------------------------------------------------------------------------
 def main(args):
@@ -73,6 +109,7 @@ def main(args):
     prompts = load_prompts(args.prompt)
 
     #---------------------------------------------------------------------------------------
+    print("="*120 + "\n")
     while True: 
         # get the next prompt from the list, or from the user interactivey
         if isinstance(prompts, list):
@@ -84,12 +121,12 @@ def main(args):
         else:
             cprint('>> PROMPT: ', 'blue', end='', flush=True)
             user_prompt = sys.stdin.readline().strip()
+            if user_prompt.lower() in ['exit', 'quit', 'bye']:
+                print("Exiting chat. Goodbye!")
+                break
         
         # Model Generate output
-        output = generate_response(model, tokenizer, user_prompt, args)
-
-        # 5. Decode and print output
-        generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+        generated_text = generate_response(model, tokenizer, user_prompt, args)
         print("\n--- Generated Text ---", generated_text, "\n")
 
 
