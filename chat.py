@@ -20,7 +20,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 """_Usage_
 python3 -m playLLM.chat --help
-python3 -m playLLM.chat --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --do-sample 
+python3 -m playLLM.chat --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --do-sample --max-new-tokens 1024
 
 """
 
@@ -66,12 +66,66 @@ def prompt_template(model, tokenizer, user_prompt: str, system_prompt: str):
     )
     
     # 3. Tokenize input
-    #inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    inputs = tokenizer(prompt, return_tensors="pt")                 # Tokenize the prompt
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}     # Move input tensors to the same device as the model
+    inputs = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
+    #inputs = tokenizer(prompt, return_tensors="pt")                 # Tokenize the prompt
+    #inputs = {k: v.to(model.device) for k, v in inputs.items()}     # Move input tensors to the same device as the model
 
     return inputs
-        
+
+def generate_full_response(model, tokenizer, user_prompt: str, args):
+    """Generate text based on a prompt."""
+
+    # apply prompt template
+    inputs = prompt_template(model, tokenizer, user_prompt, args.system_prompt)
+
+    # Initialize variables
+    generated_ids = inputs
+    all_generated_tokens = inputs
+    total_new_tokens = 0
+    eos_token_id = tokenizer.eos_token_id  # EOS token ID for the model
+    is_finished = False
+
+    while not is_finished:
+        # Generate a chunk
+        outputs = model.generate(
+            generated_ids,
+            max_new_tokens=args.max_tokens_per_chunk,     # How many tokens to generate, in chunks
+            do_sample=args.do_sample,                     # Random sampling (creative)  (reference: True)
+            temperature=args.temperature,                 # Adjust creativity, (lower, more deterministic)  (reference: 0.7)
+            pad_token_id=eos_token_id,                    # Handle padding
+            return_dict_in_generate=True,
+            output_scores=False
+        )
+
+        # Extract newly generated tokens
+        new_tokens = outputs.sequences[:, generated_ids.size(-1):]
+        all_generated_tokens = torch.cat((all_generated_tokens, new_tokens), dim=-1)
+        total_new_tokens += new_tokens.size(-1)
+
+        # Decode the current chunk for display
+        chunk_text = tokenizer.decode(new_tokens[0], skip_special_tokens=True)
+        print(f"Chunk: {chunk_text}")
+
+        # Check if generation is finished
+        if (eos_token_id is not None and eos_token_id in new_tokens) or (total_new_tokens >= args.max_new_tokens):
+            is_finished = True
+        else:
+            # Update context for the next chunk
+            generated_ids = all_generated_tokens
+
+            # Trim context if it exceeds the model's max length
+            max_model_length = model.config.max_position_embeddings  # Model's max context length
+            if generated_ids.size(-1) > max_model_length:
+                generated_ids = generated_ids[:, -max_model_length + args.max_tokens_per_chunk:]
+
+    # Decode the full generated text
+    full_response = tokenizer.decode(all_generated_tokens[0], skip_special_tokens=True)
+
+    # Extract only the assistant's response
+    assistant_response = full_response.split("<｜Assistant｜>")[-1].strip()
+    
+    return assistant_response
+
 
 def generate_response(model, tokenizer, user_prompt: str, args):
     """Generate text based on a prompt."""
@@ -126,7 +180,7 @@ def main(args):
                 break
         
         # Model Generate output
-        generated_text = generate_response(model, tokenizer, user_prompt, args)
+        generated_text = generate_full_response(model, tokenizer, user_prompt, args)
         print("\n--- Generated Text ---", generated_text, "\n")
 
 
@@ -134,6 +188,7 @@ def main(args):
 if __name__ == "__main__":
     parser = ArgParser()
     #parser.add_argument("--no-streaming", action="store_true", help="wait to output entire reply instead of token by token")
+    parser.add_argument("--max-tokens-per-chunk", type=int, default=50, help="Max tokens to generate per chunk")
     args = parser.parse_args()
 
     main(args)
