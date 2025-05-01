@@ -20,8 +20,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 """_Usage_
 python3 -m playLLM.chat --help
-python3 -m playLLM.chat --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --do-sample --max-new-tokens 1024
-
+python3 -m playLLM.chat --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --do-sample --max-new-tokens 1024 --max-tokens-per-chunk 50
 """
 
 #-------------------------------------------------------------------------------------------
@@ -31,6 +30,10 @@ def load_model(model_id: str):
 
     # Load tokenizer and model (this will download the model if not already present locally)
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+    # Ensure pad_token is set (if not already set)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     # Load model with appropriate configuration for your hardware
     model = AutoModelForCausalLM.from_pretrained(
@@ -80,9 +83,6 @@ def generate_full_response(model, tokenizer, user_prompt: str, args):
 
     # Initialize variables
     generated_ids = inputs
-    all_generated_tokens = inputs
-    total_new_tokens = 0
-    eos_token_id = tokenizer.eos_token_id  # EOS token ID for the model
     is_finished = False
 
     while not is_finished:
@@ -92,34 +92,33 @@ def generate_full_response(model, tokenizer, user_prompt: str, args):
             max_new_tokens=args.max_tokens_per_chunk,     # How many tokens to generate, in chunks
             do_sample=args.do_sample,                     # Random sampling (creative)  (reference: True)
             temperature=args.temperature,                 # Adjust creativity, (lower, more deterministic)  (reference: 0.7)
-            pad_token_id=eos_token_id,                    # Handle padding
+            pad_token_id=tokenizer.pad_token_id,          # Handle padding
+            eos_token_id=tokenizer.eos_token_id,          # EOS token ID for the model
             return_dict_in_generate=True,
             output_scores=False
         )
 
         # Extract newly generated tokens
         new_tokens = outputs.sequences[:, generated_ids.size(-1):]
-        all_generated_tokens = torch.cat((all_generated_tokens, new_tokens), dim=-1)
-        total_new_tokens += new_tokens.size(-1)
+
+        # Update context for the next chunk
+        generated_ids = outputs.sequences
 
         # Decode the current chunk for display
         chunk_text = tokenizer.decode(new_tokens[0], skip_special_tokens=True)
         print(f"Chunk: {chunk_text}")
 
         # Check if generation is finished
-        if (eos_token_id is not None and eos_token_id in new_tokens) or (total_new_tokens >= args.max_new_tokens):
+        if (tokenizer.eos_token_id in new_tokens) or (len(new_tokens[0]) < args.max_tokens_per_chunk):
             is_finished = True
         else:
-            # Update context for the next chunk
-            generated_ids = all_generated_tokens
-
             # Trim context if it exceeds the model's max length
             max_model_length = model.config.max_position_embeddings  # Model's max context length
             if generated_ids.size(-1) > max_model_length:
                 generated_ids = generated_ids[:, -max_model_length + args.max_tokens_per_chunk:]
 
     # Decode the full generated text
-    full_response = tokenizer.decode(all_generated_tokens[0], skip_special_tokens=True)
+    full_response = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
 
     # Extract only the assistant's response
     assistant_response = full_response.split("<｜Assistant｜>")[-1].strip()
@@ -136,13 +135,14 @@ def generate_response(model, tokenizer, user_prompt: str, args):
     # 4. Generate bot reply
     with torch.no_grad():
         output = model.generate(
-            **inputs,
+            inputs,
             max_new_tokens=args.max_new_tokens,           # How many tokens to generate (reference: 200)
             min_new_tokens=args.min_new_tokens,
             do_sample=args.do_sample,                     # Random sampling (creative)  (reference: True)
             temperature=args.temperature,                 # Lower = more deterministic  (reference: 0.7)
             top_p=args.top_p,                             # Top-p (nucleus sampling)    (reference: 0.9)
             repetition_penalty=args.repetition_penalty,   # Penalize repeated phrases (reference: 1.1)
+            pad_token_id=tokenizer.pad_token_id,          # Handle padding
             eos_token_id=tokenizer.eos_token_id,          # End generation at EOS
         )
 
@@ -180,7 +180,10 @@ def main(args):
                 break
         
         # Model Generate output
-        generated_text = generate_full_response(model, tokenizer, user_prompt, args)
+        if args.max_tokens_per_chunk > 0:
+            generated_text = generate_full_response(model, tokenizer, user_prompt, args)
+        else:
+            generated_text = generate_response(model, tokenizer, user_prompt, args)
         print("\n--- Generated Text ---", generated_text, "\n")
 
 
@@ -188,7 +191,7 @@ def main(args):
 if __name__ == "__main__":
     parser = ArgParser()
     #parser.add_argument("--no-streaming", action="store_true", help="wait to output entire reply instead of token by token")
-    parser.add_argument("--max-tokens-per-chunk", type=int, default=50, help="Max tokens to generate per chunk")
+    parser.add_argument("--max-tokens-per-chunk", type=int, default=0, help="Max tokens to generate per chunk")
     args = parser.parse_args()
 
     main(args)
